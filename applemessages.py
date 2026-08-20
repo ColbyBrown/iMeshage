@@ -61,7 +61,7 @@ class AppleScriptBridge:
         Args:
             config_path: Path to configuration JSON file
         """
-        self.db_path = IMESSAGE_DB_PATH
+        self.db_path = iMESSAGE_DB_PATH
         self.mapping_file: Optional[Path] = None
         self.new_messages_callback: Optional[Callable] = None
         self._connection: Optional[sqlite3.Connection] = None

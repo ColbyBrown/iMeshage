@@ -445,9 +445,11 @@ class MeshtasticBridge:
 class VirtualNodeManager:
     """Manages virtual node ID allocation and mapping."""
 
-    def __init__(self, start_hex: str = "99999991", max_nodes: int = 100):
+    def __init__(self, start_hex: str = "99999991", max_nodes: int = 100,
+                 mapping_file: str = "node_mapping.json"):
         self.start_hex = start_hex
         self.max_nodes = max_nodes
+        self.mapping_file = Path(mapping_file)
         self.current_allocation = int.from_bytes(
             bytes.fromhex(start_hex), 'big'
         )
