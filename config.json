@@ -1,0 +1,17 @@
+{
+  "meshtastic": {
+    "device_path": "/dev/cu.usbmodem*",
+    "channel_index": 1,
+    "channel_name": "iBridge",
+    "my_node_id": "IGW0001",
+    "tdeck_node_id": "TGDK0001"
+  },
+  "virtual_nodes": {
+    "start_hex": "99999991",
+    "mapping_file": "node_mapping.json"
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "imessage_bridge.log"
+  }
+}
