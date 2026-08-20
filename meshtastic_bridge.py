@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Optional, List, Dict, Any, Union
 from enum import IntEnum
+from pathlib import Path
 
 # Try to import meshtastic Python client
 try:
@@ -25,7 +26,7 @@ except ImportError:
     print("Warning: meshtastic package not installed. Install with: pip install meshtastic")
 
 import serial.tools.list_ports
-
+from applemessages import AppleScriptBridge
 
 class PortNumber(IntEnum):
     """Meshtastic application port numbers."""
@@ -36,7 +37,7 @@ class PortNumber(IntEnum):
 @dataclass
 class Config:
     """Configuration for Meshtastic client."""
-    device_path: str = "/dev/cu.usbmodem*"
+    device_path: str = "/dev/cu.usbserial-0001"
     channel_index: int = 1  # Secondary channel (slot 1)
     channel_name: str = "iBridge"
     my_node_id: str = "IGW0001"  # Gateway node ID
@@ -443,9 +444,11 @@ class MeshtasticBridge:
 class VirtualNodeManager:
     """Manages virtual node ID allocation and mapping."""
 
-    def __init__(self, start_hex: str = "99999991", max_nodes: int = 100):
+    def __init__(self, start_hex: str = "99999991", max_nodes: int = 100, mapping_file: str = "node_mapping.json"):
+        
         self.start_hex = start_hex
         self.max_nodes = max_nodes
+        self.mapping_file = Path(mapping_file)
         self.current_allocation = int.from_bytes(
             bytes.fromhex(start_hex), 'big'
         )
@@ -503,10 +506,10 @@ class IToMBridge:
 
             # Apply user overrides to default config
             self.config.device_path = user_config.get('meshtastic', {}).get(
-                'device_path', '/dev/cu.usbmodem*'
+                'device_path', '/dev/cu.usbserial-0001'
             )
             self.config.channel_index = user_config.get('meshtastic', {}).get(
-                'channel_index', 1
+                'channel_index', 2
             )
 
         self.applescript_bridge: Optional[AppleScriptBridge] = None
