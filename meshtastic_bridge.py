@@ -26,6 +26,7 @@ except ImportError:
     print("Warning: meshtastic package not installed. Install with: pip install meshtastic")
 
 import serial.tools.list_ports
+
 from applemessages import AppleScriptBridge
 
 class PortNumber(IntEnum):
@@ -444,8 +445,9 @@ class MeshtasticBridge:
 class VirtualNodeManager:
     """Manages virtual node ID allocation and mapping."""
 
+
     def __init__(self, start_hex: str = "99999991", max_nodes: int = 100, mapping_file: str = "node_mapping.json"):
-        
+
         self.start_hex = start_hex
         self.max_nodes = max_nodes
         self.mapping_file = Path(mapping_file)
