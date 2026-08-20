@@ -76,6 +76,30 @@ Messages detected in database but not appearing on T-Deck.
    ls -l ~/iMeshage/node_mapping.json
    ```
 
+### Bridge connects but no mesh messages appear
+
+**Symptoms:**
+The gateway reports "Subscribed to text message channel" but nothing shows
+up on the T-Deck.
+
+**Debug steps:**
+
+1. **Confirm the channel name and PSK match on both radios:**
+   ```bash
+   meshtastic --port /dev/cu.usbmodem* --info    # gateway radio
+   meshtastic --port /dev/cu.usbserial* --info   # T-Deck
+   ```
+   Slot 1 must be **enabled** on both, with an identical channel name and
+   identical PSK. Any mismatch makes packets unreadable between devices.
+
+2. **Re-share the channel if unsure:**
+   ```bash
+   # Print the URL on the gateway radio
+   meshtastic --port /dev/cu.usbmodem* --ch-index 1 --ch-url
+   # Apply it on the T-Deck
+   meshtastic --port /dev/cu.usbserial* --ch-url "https://www.meshtastic.org/e/#...."
+   ```
+
 ### ACK packets not appearing on T-Deck
 
 **Symptoms:**
@@ -96,16 +120,13 @@ Long messages are cut off or corrupted.
 
 **Solutions:**
 
-1. **Check MTU configuration:**
-   Your radio may need larger MTU:
-   ```python
-   from meshtastic.util.telemetry_setter import set_config
-   set_config({
-       "position": {
-           "max_uptime": 43200,  # Longer interval = more time for large messages
-       }
-   })
+1. **Check the channel and modem configuration:**
+   ```bash
+   meshtastic --port /dev/cu.usbmodem* --info
    ```
+   Confirm slot 1 is enabled with the expected channel name and note the
+   modem preset. The ~237-byte LoRa payload limit means very long messages
+   can be truncated at the radio level regardless of software timing.
 
 2. **Implement chunking in your gateway script:**
    Break long messages into smaller chunks with indices.

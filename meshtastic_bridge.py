@@ -128,23 +128,39 @@ class MeshtasticBridge:
         return matching_ports
 
     def _configure_channel(self) -> None:
-        """Configure the iBridge channel on the gateway radio."""
+        """
+        Select the configured channel slot on the gateway radio.
+
+        The channel itself (name + PSK) is created out-of-band, as described
+        in GUIDE.md ("Configure Channel Settings"); the bridge only connects
+        to the slot given by ``config.channel_index``.
+        """
+        slot = self.config.channel_index
+        print(
+            f"Using Meshtastic channel slot {slot} "
+            f"(expected name: '{self.config.channel_name}')"
+        )
+
+        if not self.client or not hasattr(self.client, "channels"):
+            return
+
         try:
-            from meshtastic.util.telemetry_setter import set_config, set_channel
-
-            # Set up secondary channel (slot 1) for our bridge traffic
-            sub_config = {
-                "subconfig": {
-                    "app": {
-                        "channel": f"0x{hash(self.config.channel_name):X}"
-                    }
-                }
-            }
-
-            set_config(sub_config)
-
-        except Exception as e:
-            print(f"Warning: Could not configure channel: {e}")
+            channel = self.client.channels[slot]
+            if channel is None or getattr(channel, "role", 0) == 0:
+                print(
+                    f"Warning: Channel slot {slot} does not appear to be "
+                    f"enabled on this radio. Create it first (see GUIDE.md):\n"
+                    f"  meshtastic --port {self.config.device_path} "
+                    f"--ch-index {slot} --ch-set name {self.config.channel_name}\n"
+                    f"  meshtastic --port {self.config.device_path} "
+                    f"--ch-index {slot} --ch-set psk random"
+                )
+        except (KeyError, IndexError, AttributeError):
+            print(
+                f"Warning: Could not read channel slot {slot} from the radio; "
+                "verify it is configured with a matching name and PSK "
+                "(see GUIDE.md)."
+            )
 
     def subscribe_to_text_messages(self) -> bool:
         """Subscribe to TEXT_MESSAGE_APP packets (port 30016)."""
