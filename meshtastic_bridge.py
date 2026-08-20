@@ -26,6 +26,8 @@ except ImportError:
 
 import serial.tools.list_ports
 
+from applemessages import AppleScriptBridge
+
 
 class PortNumber(IntEnum):
     """Meshtastic application port numbers."""
