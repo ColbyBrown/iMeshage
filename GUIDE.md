@@ -25,20 +25,49 @@ dmesg | tail -20
 
 ### Configure Channel Settings
 
-1. Log into your Meshtastic radio via SSH/UART
-2. Set up a private channel on slot 1 (index 1):
+Meshtastic radios do **not** have an SSH or UART login. Channels are configured over the USB serial connection using the `meshtastic` command-line tool (installed below in Step 2) or the Meshtastic mobile/desktop app.
 
-```python
-from meshtastic.util.telemetry_setter import set_config
+A Meshtastic channel is defined by two values that are only valid **together**:
 
-set_config({
-    "subconfig": {
-        "app": {
-            "channel": "0x5A"  # Your chosen channel hash
-        }
-    }
-})
+- a **channel name** (e.g. `iBridge`), and
+- a **pre-shared key** (PSK).
+
+Both your gateway radio *and* your T-Deck must be configured with the **same name and same PSK** on the same slot (`index 1`, the first secondary channel). If either value differs, packets remain unreadable between the radios and messages will not forward.
+
+**Option A — Meshtastic app (easiest):**
+
+1. Create a new private channel named `iBridge` on slot 1 of your gateway radio.
+2. Change its PSK to `random` (generates a fresh key).
+3. Use the app's "share channel" feature (QR code / channel URL) to load the identical channel onto your T-Deck.
+
+**Option B — CLI:**
+
+1. Create the channel on slot 1 of the gateway radio:
+
+```bash
+meshtastic --port /dev/cu.usbmodem* --ch-index 1 --ch-set name iBridge
+meshtastic --port /dev/cu.usbmodem* --ch-index 1 --ch-set psk random
 ```
+
+2. Print the channel URL (it carries both the name and the key):
+
+```bash
+meshtastic --port /dev/cu.usbmodem* --ch-index 1 --ch-url
+```
+
+3. Connect the T-Deck and apply that URL:
+
+```bash
+meshtastic --port /dev/cu.usbserial* --ch-url "https://www.meshtastic.org/e/#...."
+```
+
+4. Verify slot 1 is enabled on both devices:
+
+```bash
+meshtastic --port /dev/cu.usbmodem* --info
+```
+
+This is a one-time, out-of-band step. The bridge does **not** create the channel itself; it simply connects to the slot set in `config.json` (`"channel_index": 1`).
 
 ## Step 2: Python Dependencies
 
@@ -110,11 +139,19 @@ If nothing appears, check `/System/Library/Extensions/IOUSBMassStorage.kext` per
 
 ### Messages not forwarding
 
-Verify your Meshtastic channel is active:
+First, confirm the channel name and PSK match on both devices:
 
 ```bash
-python3 -c "from meshtastic.client import MeshtasticClient; c = MeshtasticClient('/dev/cu.usbmodem*', connect=True); print(c.my_info)"
-c.disconnect()
+meshtastic --port /dev/cu.usbmodem* --info    # gateway radio
+meshtastic --port /dev/cu.usbserial* --info   # T-Deck
+```
+
+Both must show slot 1 **enabled** with an identical channel name and identical PSK. If in doubt, re-share the channel URL from the gateway radio to the T-Deck (see "Configure Channel Settings" above).
+
+Then verify the gateway can communicate with the radio:
+
+```bash
+python3 -c "from meshtastic.client import MeshtasticClient; c = MeshtasticClient('/dev/cu.usbmodem*', connect=True); print(c.my_info); c.disconnect()"
 ```
 
 ### AppleScript not working

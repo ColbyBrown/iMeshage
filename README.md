@@ -55,7 +55,7 @@ iMeshage/
 
 ## Getting Started
 
-1. Configure your private channel on both the gateway radio and T-Deck
+1. Configure your private channel on both the gateway radio and T-Deck — they must share an identical channel name **and** PSK (see the "Configure Channel Settings" section of [GUIDE.md](GUIDE.md))
 2. Update `config.json` with your settings
 3. Run the gateway: `python gateway.py`
 
