@@ -178,10 +178,10 @@ Or use tcpdump if your radio supports packet logging.
 
 Check for NodeDB overflow:
 ```python
-from meshtastic.client import MeshtasticClient
-client = MeshtasticClient('/dev/cu.usbmodem*', connect=True)
-print(f"Discovered nodes: {len(client.node_db.nodes)}")
-for node_id, info in client.node_db.nodes.items():
+import meshtastic.serial_interface
+interface = meshtastic.serial_interface.SerialInterface(devPath=None)
+print(f"Discovered nodes: {len(interface.nodesByNum)}")
+for node_id, info in interface.nodes.items():
     print(f"  {node_id}: {info}")
 ```
 

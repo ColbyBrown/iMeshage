@@ -3,6 +3,7 @@
 
 meshtastic>=0.6.0
 PySerial>=3.5
+pubsub>=4.0  # pubsub library used by meshtastic for receive callbacks
 
 # Optional: for enhanced features
 kivy-ios>=1.3  # For serial device enumeration on Linux

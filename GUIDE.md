@@ -158,7 +158,7 @@ Both must show slot 1 **enabled** with an identical channel name and identical P
 Then verify the gateway can communicate with the radio:
 
 ```bash
-python3 -c "from meshtastic.client import MeshtasticClient; c = MeshtasticClient('/dev/cu.usbmodem*', connect=True); print(c.my_info); c.disconnect()"
+python3 -c "import meshtastic.serial_interface; i = meshtastic.serial_interface.SerialInterface(devPath=None); print(i.myInfo); i.close()"
 ```
 
 ### AppleScript not working

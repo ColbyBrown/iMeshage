@@ -17,32 +17,34 @@ from typing import Callable, Optional, List, Dict, Any, Union
 from enum import IntEnum
 from pathlib import Path
 
-# Try to import meshtastic Python client
+# Import the real meshtastic 2.x API.  See https://python.meshtastic.org
+# and the working reference at /Users/colby/zen_sos/watch_for_sos.py.
 try:
-    from meshtastic.client import MeshtasticClient, MeshPacket, MeshConnectionType
-    from meshtastic.protobuf.packet_pb2 import PacketIterator
-    from meshtastic.protobuf.apps_pb2 import DecodedMessage
+    import meshtastic
+    import meshtastic.serial_interface
+    from meshtastic.protobuf import portnums_pb2, mesh_pb2
+    from pubsub import pub
 except ImportError:
-    print("Warning: meshtastic package not installed. Install with: pip install meshtastic")
+    print("Warning: meshtastic package not installed. Install with: pip install meshtastic pyserial")
+    meshtastic = None
+    portnums_pb2 = None
+    mesh_pb2 = None
+    pub = None
 
 import serial.tools.list_ports
 
 from applemessages import AppleScriptBridge
 
 class PortNumber(IntEnum):
-    """Meshtastic application port numbers."""
-    TEXT_MESSAGE_APP = 30016
-    POSITION_APP = 30020
+    """Meshtastic application port numbers (portnums_pb2.PortNum)."""
+    TEXT_MESSAGE_APP = 1
+    POSITION_APP = 3
 
 
 @dataclass
 class Config:
     """Configuration for Meshtastic client."""
-<<<<<<< Updated upstream
-    device_path: str = "/dev/cu.usbserial-0001"
-=======
     device_path: str = "/dev/cu.usbserial*"  # CP210x/CH340 bridge; USB-native boards use /dev/cu.usbmodem*
->>>>>>> Stashed changes
     channel_index: int = 1  # Secondary channel (slot 1)
     channel_name: str = "iBridge"
     my_node_id: str = "IGW0001"  # Gateway node ID
@@ -72,11 +74,12 @@ class MeshtasticBridge:
     def __init__(self, config: Optional[Config] = None, mapping_file: str = "node_mapping.json"):
         self.config = config or Config()
         self.mapping_file = mapping_file
-        self.client: Optional[MeshtasticClient] = None
+        self.client: Optional[Any] = None
         self.is_connected = False
-        self.packet_callback: Optional[Callable[[MeshPacket], None]] = None
+        self.my_node_id: Optional[str] = None
+        self.packet_callback: Optional[Callable[[Dict[str, Any]], None]] = None
         self.subscribed_to_text = False
-        self._pending_ack: Dict[int, MeshPacket] = {}
+        self._pending_ack: Dict[int, Dict[str, Any]] = {}
 
     def connect(self) -> bool:
         """
@@ -86,19 +89,34 @@ class MeshtasticBridge:
             True if connection was successful
         """
         try:
-            # Find the actual device path
+            if meshtastic is None:
+                print("Error: meshtastic package not available")
+                return False
+
+            # Find the actual device path (None = let meshtastic auto-detect)
             available_ports = self._find_available_device()
-            if not available_ports:
+            dev_path = available_ports[0] if available_ports else None
+            if not available_ports and self.config.device_path not in ("", None):
+                # No matching port found and a specific path was configured
                 print(f"Error: No Meshtastic USB device found at {self.config.device_path}")
                 return False
 
-            self.client = MeshtasticClient(self.config.device_path, connect=True)
+            self.client = meshtastic.serial_interface.SerialInterface(devPath=dev_path)
+
+            # Wait briefly for the radio to send its config so myInfo is populated
+            self.client.waitForConfig()
 
             # Configure the channel (if needed)
             self._configure_channel()
 
+            try:
+                my_num = self.client.myInfo.my_node_num
+                self.my_node_id = f"!{my_num:08x}"
+            except Exception:
+                self.my_node_id = None
+
             self.is_connected = True
-            print(f"Connected to Meshtastic node: {self.client.my_info.id}")
+            print(f"Connected to Meshtastic node: {self.my_node_id}")
             return True
 
         except Exception as e:
@@ -109,8 +127,8 @@ class MeshtasticBridge:
         """Close the connection to the radio."""
         if self.client:
             try:
-                self.client.disconnect()
-            except:
+                self.client.close()
+            except Exception:
                 pass
             self.is_connected = False
             print("Disconnected from Meshtastic")
@@ -145,11 +163,11 @@ class MeshtasticBridge:
             f"(expected name: '{self.config.channel_name}')"
         )
 
-        if not self.client or not hasattr(self.client, "channels"):
+        if not self.client or not hasattr(self.client, "localNode"):
             return
 
         try:
-            channel = self.client.channels[slot]
+            channel = self.client.localNode.getChannelByChannelIndex(slot)
             if channel is None or getattr(channel, "role", 0) == 0:
                 print(
                     f"Warning: Channel slot {slot} does not appear to be "
@@ -172,12 +190,10 @@ class MeshtasticBridge:
             return False
 
         try:
-            # Subscribe to text message topic
-            self.subscribed_to_text = True
-
             # Subscribe to mesh messages in general
             pub.subscribe(self.on_receive, "meshtastic.receive")
 
+            self.subscribed_to_text = True
             print("Subscribed to text message channel")
             return True
         except Exception as e:
@@ -205,40 +221,28 @@ class MeshtasticBridge:
             return False
 
         try:
-            # Encode text as UTF-16LE, append checksum and length bytes
-            # Meshtastic expects specific packet encoding
-            encoded = payload.encode('utf-16-le')
-
-            # Create MeshPacket with TEXT_MESSAGE_APP
-            mesh_packet = self.client.create_mesh_packet(
-                from_node_id=self.client.my_info.id if not from_node else from_node,
-                decoded=DecodedMessage(port_number=PortNumber.TEXT_MESSAGE_APP.value),
-                payload=encoded
+            # meshtastic's sendText handles UTF-8 encoding and packet
+            # construction internally.  `from_node` is accepted for API
+            # compatibility but is not honored -- the sender is always the
+            # gateway radio (a limitation of the simple sendText API).
+            dest = to_nodes[0] if to_nodes else "^all"
+            self.client.sendText(
+                payload,
+                destinationId=dest,
+                channelIndex=self.config.channel_index,
             )
-
-            # If targeting specific nodes (like DMs to virtual nodes)
-            if to_nodes:
-                self.client.send_raw(to_nodes[0], mesh_packet.payload)
-
-            # Otherwise broadcast over the mesh channel
-            else:
-                self.client.sendMessage(
-                    portNum=PortNumber.TEXT_MESSAGE_APP.value,
-                    text=payload,
-                    fromNode=self.config.my_node_id if not from_node else from_node
-                )
-
             return True
         except Exception as e:
             print(f"Error publishing message: {e}")
             return False
 
-    def on_receive(self, packet: MeshPacket) -> None:
+    def on_receive(self, packet: Dict[str, Any], interface: Any = None) -> None:
         """
         Callback for incoming mesh packets.
 
         Args:
-            packet: The received MeshPacket
+            packet: The received packet as a dictionary (pubsub payload).
+            interface: The MeshInterface that received it (unused).
         """
         if self.packet_callback:
             try:
@@ -270,46 +274,56 @@ class MeshtasticBridge:
 
     def handle_incoming_virtual_node(
         self,
-        packet: MeshPacket,
+        packet: Dict[str, Any],
         mappings: Dict[str, VirtualNodeMapping]
     ) -> Optional[str]:
         """
         Handle incoming packet from a virtual node.
 
         Args:
-            packet: Received mesh packet
+            packet: Received mesh packet (dictionary from pubsub)
             mappings: Dictionary of virtual_node_id -> VirtualNodeMapping
 
         Returns:
             The iMessage chat_guid if this packet is for a known contact, None otherwise
         """
-        # Check if this packet is addressed to our gateway (direct message)
-        if packet.to is not None and packet.to != self.client.my_info.id:
-            target_id = packet.to
-            if target_id in mappings:
-                mapping = mappings[target_id]
+        # A DM addressed to a virtual node arrives with that node's id in `toId`.
+        # Broadcasts have toId == "^all" (or the gateway id); for those we look at
+        # the sender instead.
+        to_id = packet.get("toId")
+        target_id = to_id if to_id and to_id != "^all" else packet.get("fromId")
 
-                # Extract the message text
-                payload_str = self._decode_packet_payload(packet)
+        if target_id and target_id in mappings:
+            mapping = mappings[target_id]
 
-                # Return the chat_guid for routing to iMessage
-                return mapping.chat_guid, payload_str
+            # Extract the message text
+            payload_str = self._decode_packet_payload(packet)
+
+            # Return the chat_guid for routing to iMessage
+            return mapping.chat_guid, payload_str
 
         return None
 
-    def _decode_packet_payload(self, packet: MeshPacket) -> str:
+    def _decode_packet_payload(self, packet: Dict[str, Any]) -> str:
         """Extract and decode the message payload from a packet."""
         try:
-            if hasattr(packet, 'decoded'):
-                decoded = packet.decoded
+            decoded = packet.get("decoded", {})
+            if not decoded:
+                return ""
 
-                # Check for DecodedMessage protobuf
-                if hasattr(decoded, 'portnum') and hasattr(decoded, 'payload'):
-                    port_num = decoded.portnum
+            # Text messages get a decoded "text" field populated by meshtastic's
+            # _onTextReceive handler.
+            text = decoded.get("text")
+            if text:
+                return text
 
-                    if port_num == PortNumber.TEXT_MESSAGE_APP.value:
-                        # Text message
-                        return decoded.payload.decode('utf-16-le') if decoded.payload else ""
+            # Fall back to raw payload bytes (utf-8 for TEXT_MESSAGE_APP).
+            payload = decoded.get("payload")
+            if payload:
+                try:
+                    return payload.decode("utf-8")
+                except UnicodeDecodeError:
+                    return ""
 
         except Exception as e:
             print(f"Error decoding payload: {e}")
@@ -379,7 +393,7 @@ class MeshtasticBridge:
 
     def setup_message_handler(
         self,
-        on_incoming: Callable[[MeshPacket], Optional[str]],
+        on_incoming: Callable[[Dict[str, Any]], Optional[str]],
         on_outgoing: Callable[[VirtualNodeMapping, str], Optional[Callable]]
     ) -> None:
         """
@@ -392,7 +406,7 @@ class MeshtasticBridge:
         self.packet_callback = lambda pkt: [
             self.handle_incoming_virtual_node(pkt, self._load_mappings()),
             self.handle_outgoing_from_virtual_node(
-                pkt.to if pkt.to else "",
+                pkt.get("toId") or pkt.get("fromId") or "",
                 self._decode_packet_payload(pkt),
                 self._load_mappings()
             )
