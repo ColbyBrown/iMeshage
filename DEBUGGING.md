@@ -15,10 +15,12 @@ Error: No Meshtastic USB device found at /dev/cu.usbmodem*
 
 1. **Check if device is visible:**
    ```bash
-   ls -l /dev/cu.* | grep modem
+   ls -l /dev/cu.* | grep -E 'usb(serial|modem)'
    # or
-   system_profiler SPUSBDataType | grep "Serial"
+   system_profiler SPUSBDataType | grep -i -A5 serial
    ```
+   The radio may appear as `/dev/cu.usbserial-*` (CP210x/CH340/FTDI bridge
+   chip) instead of `/dev/cu.usbmodem*` (native USB).
 
 2. **Set correct permissions:**
    ```bash

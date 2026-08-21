@@ -38,7 +38,11 @@ class PortNumber(IntEnum):
 @dataclass
 class Config:
     """Configuration for Meshtastic client."""
+<<<<<<< Updated upstream
     device_path: str = "/dev/cu.usbserial-0001"
+=======
+    device_path: str = "/dev/cu.usbserial*"  # CP210x/CH340 bridge; USB-native boards use /dev/cu.usbmodem*
+>>>>>>> Stashed changes
     channel_index: int = 1  # Secondary channel (slot 1)
     channel_name: str = "iBridge"
     my_node_id: str = "IGW0001"  # Gateway node ID
