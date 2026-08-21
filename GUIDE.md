@@ -13,15 +13,18 @@ This guide will walk you through setting up the iMessage to Meshtastic bridge on
 
 ### Connect Your Radio
 
-Plug your Meshtastic-enabled USB radio into your Mac. It should appear in `/dev/cu.usbmodem*`.
+Plug your Meshtastic-enabled USB radio into your Mac. Depending on the board's hardware, it appears as **one of two** prefixes:
 
-Check for available devices:
+- `/dev/cu.usbserial-*` — boards with a CP210x, CH340, or FTDI USB-to-serial bridge chip
+- `/dev/cu.usbmodem*` — boards with native USB (USB CDC)
+
+Both are equally valid. List the candidates:
 
 ```bash
-ls -l /dev/cu.usbmodem*
-# or
-dmesg | tail -20
+ls -l /dev/cu.*
 ```
+
+If you're unsure which entry is the radio, unplug it, run the command again, and see which one disappears. Always use the `/dev/cu.*` entry, never its `/dev/tty.*` twin. Whichever prefix you see here (e.g. `/dev/cu.usbserial*`) is what goes into `config.json` in Step 3.
 
 ### Configure Channel Settings
 
@@ -41,6 +44,8 @@ Both your gateway radio *and* your T-Deck must be configured with the **same nam
 3. Use the app's "share channel" feature (QR code / channel URL) to load the identical channel onto your T-Deck.
 
 **Option B — CLI:**
+
+Substitute the device path you saw in Step 1 (e.g. `/dev/cu.usbserial-*`) anywhere you see `/dev/cu.usbmodem*` below.
 
 1. Create the channel on slot 1 of the gateway radio:
 
@@ -87,13 +92,15 @@ Edit `config.json`:
 ```json
 {
   "meshtastic": {
-    "device_path": "/dev/cu.usbmodem*",
+    "device_path": "/dev/cu.usbserial*",
     "channel_index": 1,
     "channel_name": "iBridge",
     "my_node_id": "IGW0001"
   }
 }
 ```
+
+Set `device_path` to whichever path appeared in Step 1 (`/dev/cu.usbserial*` for CP210x/CH340/FTDI bridge chips, or `/dev/cu.usbmodem*` for USB-native boards). The `*` is a wildcard, so the trailing digits don't matter.
 
 ## Step 4: Running the Bridge
 
@@ -132,10 +139,10 @@ iMeshage bridge monitoring for new messages...
 Make sure your radio is properly connected and configured:
 
 ```bash
-ls /dev/cu.* | grep modem
+ls /dev/cu.* | grep -E 'usb(serial|modem)'
 ```
 
-If nothing appears, check `/System/Library/Extensions/IOUSBMassStorage.kext` permissions.
+If nothing appears, check what USB chip macOS reports: `system_profiler SPUSBDataType | grep -i -A5 serial`. Some CH340-based boards also need a vendor driver installed.
 
 ### Messages not forwarding
 

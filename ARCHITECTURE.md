@@ -109,7 +109,7 @@ Persistent mapping between iMessage conversations and Meshtastic virtual nodes:
 ```json
 {
   "meshtastic": {
-    "device_path": "/dev/cu.usbmodem*",
+    "device_path": "/dev/cu.usbserial*",
     "channel_index": 1,
     "channel_name": "iBridge",
     "my_node_id": "IGW0001"
