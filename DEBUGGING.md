@@ -65,7 +65,7 @@ Messages detected in database but not appearing on T-Deck.
 
 1. **Check database for new messages:**
    ```bash
-   sqlite3 ~/Library/Messages/chat.db "SELECT sender_name, plaintext FROM messages ORDER BY timestamp DESC LIMIT 5;"
+   sqlite3 ~/Library/Messages/chat.db "SELECT h.id AS sender, m.text, datetime(m.date/1e9 + 978307200, 'unixepoch', 'localtime') AS t FROM message m JOIN handle h ON h.ROWID=m.handle_id WHERE m.is_from_me=0 ORDER BY m.date DESC LIMIT 5;"
    ```
 
 2. **Verify AppleScript is working:**

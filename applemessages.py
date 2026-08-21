@@ -12,14 +12,32 @@ import os
 import sqlite3
 import json
 import time
+import logging
 from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, Optional, Dict, List, Any
 
 
+log = logging.getLogger(__name__)
+
+
 # iMessage SQLite Database Location
 iMESSAGE_DB_PATH = os.path.expanduser("~/Library/Messages/chat.db")
+
+# chat.db stores timestamps as Cocoa epoch nanoseconds (seconds since
+# 2001-01-01 UTC, scaled by 1e9).  Unix epoch starts 2001-01-01 + 978307200 s.
+_COCOA_EPOCH_OFFSET = 978307200
+
+
+def unix_to_cocoa_ns(unix_seconds: float) -> float:
+    """Convert a Unix timestamp (seconds) to Cocoa nanoseconds."""
+    return (unix_seconds - _COCOA_EPOCH_OFFSET) * 1e9
+
+
+def cocoa_ns_to_unix(cocoa_ns: float) -> float:
+    """Convert Cocoa nanoseconds to a Unix timestamp (seconds)."""
+    return cocoa_ns / 1e9 + _COCOA_EPOCH_OFFSET
 
 
 @dataclass
@@ -76,7 +94,7 @@ class AppleScriptBridge:
                 config = json.load(f)
             self.mapping_file = Path(config.get('mapping_file', 'node_mapping.json'))
         except (json.JSONDecodeError, IOError) as e:
-            print(f"Warning: Could not load mapping config: {e}")
+            log.warning("Could not load mapping config: %s", e)
 
     def send_message(
         self,
@@ -122,7 +140,7 @@ class AppleScriptBridge:
             result = os.system("osascript -e '" + osascript_code.replace("'", "'\"'\"'") + "'")
             return result == 0
         except Exception as e:
-            print(f"Error sending iMessage via AppleScript: {e}")
+            log.exception("Error sending iMessage via AppleScript: %s", e)
             return False
 
     def send_message_with_group(
@@ -184,7 +202,7 @@ class AppleScriptBridge:
             result = os.system("osascript -e '" + osascript_code.replace("'", "'\"'\"'") + "'")
             return result == 0
         except Exception as e:
-            print(f"Error sending group iMessage via AppleScript: {e}")
+            log.exception("Error sending group iMessage via AppleScript: %s", e)
             return False
 
     def get_incoming_messages(self) -> List[Message]:
@@ -198,92 +216,115 @@ class AppleScriptBridge:
             conn = self._get_db_connection()
             cursor = conn.cursor()
 
-            # Get last checked timestamp (or use creation time if first run)
-            self._last_unread_timestamp = self._get_last_check_time(conn)
+            # Get last checked timestamp (Cocoa nanoseconds); default to
+            # 1 hour ago on first run.
+            last_check_ns = self._get_last_check_time(conn)
 
-            # Get all chats that have messages since last check
+            # chat.db uses SINGULAR table names (message, chat) and joins via
+            # chat_message_join.  Columns: message.text (body), message.date
+            # (Cocoa ns), handle.id (phone/email), chat.display_name.
             query = """
-            SELECT DISTINCT c.guid as chat_guid,
-                           c.title,
-                           m.msgguid AS message_guid,
-                           m.sender_name,
-                           (SELECT COUNT(*) FROM messages WHERE
-                            msg_id > (SELECT MAX(msg_id) FROM messages
-                                     WHERE guid = m.msgguid AND is_from_me = 0)) as unread_count
-            FROM messages m
-            JOIN chats c ON m.guid = c.guid
+            SELECT m.ROWID AS msg_rowid,
+                   m.guid AS message_guid,
+                   c.guid AS chat_guid,
+                   c.display_name AS title,
+                   h.id AS sender_handle,
+                   m.text AS body,
+                   m.date AS msg_date
+            FROM message m
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            JOIN chat c ON c.ROWID = cmj.chat_id
+            JOIN handle h ON h.ROWID = m.handle_id
             WHERE m.is_from_me = 0
-              AND m.timestamp > ?
-            ORDER BY m.timestamp DESC
+              AND m.text IS NOT NULL
+              AND m.date > ?
+            ORDER BY m.date DESC
             """
 
-            cursor.execute(query, (self._last_unread_timestamp,))
+            cursor.execute(query, (last_check_ns,))
             rows = cursor.fetchall()
 
-            results = []
+            results: List[Message] = []
+            seen_guids: set = set()
+            max_date_seen = last_check_ns
+
             for row in rows:
-                chat_guid = row['chat_guid']
+                msg_guid = row["message_guid"]
+                if msg_guid in seen_guids:
+                    continue
+                seen_guids.add(msg_guid)
 
-                # Get the full message text
-                msg_query = "SELECT plaintext FROM messages WHERE guid = ? AND timestamp > ?"
-                cursor.execute(msg_query, (row['message_guid'], self._last_unread_timestamp))
-                msg_row = cursor.fetchone()
+                body = row["body"] or ""
+                results.append(Message(
+                    guid=msg_guid,
+                    chat_guid=row["chat_guid"],
+                    sender=row["sender_handle"] or "",
+                    is_from_me=False,
+                    plaintext=body,
+                ))
 
-                if msg_row:
-                    results.append(Message(
-                        guid=row['message_guid'],
-                        chat_guid=chat_guid,
-                        sender=row['sender_name'] or '',
-                        is_from_me=False,
-                        plaintext=msg_row['plaintext']
-                    ))
+                if row["msg_date"] > max_date_seen:
+                    max_date_seen = row["msg_date"]
 
-            conn.close()
-            self._update_last_check_time()
+            # Advance the watermark so the next poll only sees newer msgs.
+            if max_date_seen > last_check_ns:
+                self._update_last_check_time(max_date_seen)
+
+            log.debug(
+                "get_incoming_messages: last_check_ns=%s found=%d",
+                last_check_ns, len(results),
+            )
             return results
 
         except sqlite3.Error as e:
-            print(f"Database error: {e}")
+            log.warning("Database error reading incoming messages: %s", e)
             return []
 
     def _get_db_connection(self) -> sqlite3.Connection:
-        """Get or create database connection."""
-        if self._connection is None or not self._connection:
+        """Get or create database connection (row factory for dict access)."""
+        if self._connection is None:
             self._connection = sqlite3.connect(self.db_path)
+            self._connection.row_factory = sqlite3.Row
         return self._connection
 
-    def _update_last_check_time(self) -> None:
-        """Update the last check timestamp in the database."""
-        conn = self._get_db_connection()
+    def _update_last_check_time(self, cocoa_ns: float) -> None:
+        """Persist the last-seen message timestamp (Cocoa nanoseconds)."""
+        # Use a short-lived connection so we don't disturb the cached poll conn.
+        conn = sqlite3.connect(self.db_path)
         try:
             cursor = conn.cursor()
-            # Create table if it doesn't exist
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS _last_check_times (
                     guid TEXT PRIMARY KEY,
                     timestamp REAL
                 )
             """)
-            current_time = time.time()
             cursor.execute(
                 "INSERT OR REPLACE INTO _last_check_times (guid, timestamp) VALUES (?, ?)",
-                ("*", current_time)  # Use "*" as wildcard key
+                ("*", float(cocoa_ns)),
             )
             conn.commit()
         except sqlite3.Error as e:
-            print(f"Error updating last check time: {e}")
+            log.warning("Error updating last check time: %s", e)
         finally:
             conn.close()
 
     def _get_last_check_time(self, conn: sqlite3.Connection) -> float:
-        """Get the last check timestamp from the database."""
+        """Get the last check timestamp (Cocoa nanoseconds).
+
+        Defaults to 1 hour ago on first run.
+        """
+        default_ns = unix_to_cocoa_ns(time.time() - 3600)
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT timestamp FROM _last_check_times WHERE guid = ? ORDER BY timestamp DESC LIMIT 1", ("*",))
+            cursor.execute(
+                "SELECT timestamp FROM _last_check_times WHERE guid = ? LIMIT 1",
+                ("*",),
+            )
             row = cursor.fetchone()
-            return row[0] if row else time.time() - 3600  # Default to 1 hour ago
+            return float(row[0]) if row else default_ns
         except sqlite3.Error:
-            return time.time() - 3600
+            return default_ns
 
     def register_new_message_callback(self, callback: Callable[[Message], None]) -> None:
         """
@@ -295,6 +336,7 @@ class AppleScriptBridge:
         self.new_messages_callback = callback
         # Check immediately if there are pending messages
         messages = self.get_incoming_messages()
+        log.info("register_new_message_callback: delivering %d pending messages", len(messages))
         for msg in messages:
             if self.new_messages_callback:
                 self.new_messages_callback(msg)
@@ -306,15 +348,17 @@ class AppleScriptBridge:
         Args:
             interval: Seconds between database scans
         """
-        print("Starting iMessage monitoring...")
+        log.info("Starting iMessage monitoring (interval=%.1fs)", interval)
         while True:
             try:
                 messages = self.get_incoming_messages()
+                if messages:
+                    log.info("monitoring: %d new message(s)", len(messages))
                 for msg in messages:
                     if self.new_messages_callback:
                         self.new_messages_callback(msg)
             except Exception as e:
-                print(f"Error during monitoring: {e}")
+                log.exception("Error during monitoring: %s", e)
             time.sleep(interval)
 
 

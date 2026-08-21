@@ -12,10 +12,13 @@ import os
 import time
 import json
 import uuid
+import logging
 from dataclasses import dataclass, field
 from typing import Callable, Optional, List, Dict, Any, Union
 from enum import IntEnum
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 # Import the real meshtastic 2.x API.  See https://python.meshtastic.org
 # and the working reference at /Users/colby/zen_sos/watch_for_sos.py.
@@ -25,7 +28,7 @@ try:
     from meshtastic.protobuf import portnums_pb2, mesh_pb2
     from pubsub import pub
 except ImportError:
-    print("Warning: meshtastic package not installed. Install with: pip install meshtastic pyserial")
+    log.warning("meshtastic package not installed. Install with: pip install meshtastic pyserial")
     meshtastic = None
     portnums_pb2 = None
     mesh_pb2 = None
@@ -90,17 +93,17 @@ class MeshtasticBridge:
         """
         try:
             if meshtastic is None:
-                print("Error: meshtastic package not available")
+                log.error("meshtastic package not available")
                 return False
 
             # Find the actual device path (None = let meshtastic auto-detect)
             available_ports = self._find_available_device()
             dev_path = available_ports[0] if available_ports else None
             if not available_ports and self.config.device_path not in ("", None):
-                # No matching port found and a specific path was configured
-                print(f"Error: No Meshtastic USB device found at {self.config.device_path}")
+                log.error("No Meshtastic USB device found matching %s", self.config.device_path)
                 return False
 
+            log.info("Connecting to Meshtastic via %s", dev_path or "auto-detect")
             self.client = meshtastic.serial_interface.SerialInterface(devPath=dev_path)
 
             # Wait briefly for the radio to send its config so myInfo is populated
@@ -116,11 +119,11 @@ class MeshtasticBridge:
                 self.my_node_id = None
 
             self.is_connected = True
-            print(f"Connected to Meshtastic node: {self.my_node_id}")
+            log.info("Connected to Meshtastic node %s", self.my_node_id)
             return True
 
         except Exception as e:
-            print(f"Error connecting to Meshtastic: {e}")
+            log.exception("Error connecting to Meshtastic: %s", e)
             return False
 
     def disconnect(self) -> None:
@@ -131,7 +134,7 @@ class MeshtasticBridge:
             except Exception:
                 pass
             self.is_connected = False
-            print("Disconnected from Meshtastic")
+            log.info("Disconnected from Meshtastic")
 
     def _find_available_device(self) -> List[str]:
         """Find available serial ports matching device path pattern."""
@@ -158,9 +161,9 @@ class MeshtasticBridge:
         to the slot given by ``config.channel_index``.
         """
         slot = self.config.channel_index
-        print(
-            f"Using Meshtastic channel slot {slot} "
-            f"(expected name: '{self.config.channel_name}')"
+        log.info(
+            "Using Meshtastic channel slot %d (expected name: '%s')",
+            slot, self.config.channel_name,
         )
 
         if not self.client or not hasattr(self.client, "localNode"):
@@ -169,35 +172,35 @@ class MeshtasticBridge:
         try:
             channel = self.client.localNode.getChannelByChannelIndex(slot)
             if channel is None or getattr(channel, "role", 0) == 0:
-                print(
-                    f"Warning: Channel slot {slot} does not appear to be "
-                    f"enabled on this radio. Create it first (see GUIDE.md):\n"
-                    f"  meshtastic --port {self.config.device_path} "
-                    f"--ch-index {slot} --ch-set name {self.config.channel_name}\n"
-                    f"  meshtastic --port {self.config.device_path} "
-                    f"--ch-index {slot} --ch-set psk random"
+                log.warning(
+                    "Channel slot %d does not appear to be enabled on this "
+                    "radio. Create it first (see GUIDE.md):\n"
+                    "  meshtastic --port %s --ch-index %d --ch-set name %s\n"
+                    "  meshtastic --port %s --ch-index %d --ch-set psk random",
+                    slot, self.config.device_path, slot, self.config.channel_name,
+                    self.config.device_path, slot,
                 )
+            else:
+                ch_name = getattr(getattr(channel, "settings", None), "name", "") or ""
+                log.info("Channel slot %d OK (name='%s', role=%d)", slot, ch_name, getattr(channel, "role", 0))
         except (KeyError, IndexError, AttributeError):
-            print(
-                f"Warning: Could not read channel slot {slot} from the radio; "
-                "verify it is configured with a matching name and PSK "
-                "(see GUIDE.md)."
+            log.warning(
+                "Could not read channel slot %s from the radio; verify it is "
+                "configured with a matching name and PSK (see GUIDE.md).", slot,
             )
 
     def subscribe_to_text_messages(self) -> bool:
-        """Subscribe to TEXT_MESSAGE_APP packets (port 30016)."""
+        """Subscribe to TEXT_MESSAGE_APP packets."""
         if not self.client or not self.is_connected:
             return False
 
         try:
-            # Subscribe to mesh messages in general
             pub.subscribe(self.on_receive, "meshtastic.receive")
-
             self.subscribed_to_text = True
-            print("Subscribed to text message channel")
+            log.info("Subscribed to meshtastic.receive")
             return True
         except Exception as e:
-            print(f"Error subscribing to messages: {e}")
+            log.exception("Error subscribing to messages: %s", e)
             return False
 
     def publish_text_message(
@@ -211,13 +214,14 @@ class MeshtasticBridge:
 
         Args:
             payload: The message text to broadcast
-            from_node: Source node ID (defaults to gateway's own ID)
+            from_node: Source node ID (accepted but not honored -- see note)
             to_nodes: List of target node IDs (broadcast if None)
 
         Returns:
             True if message was published successfully
         """
         if not self.client or not self.is_connected:
+            log.warning("publish_text_message: not connected")
             return False
 
         try:
@@ -231,9 +235,14 @@ class MeshtasticBridge:
                 destinationId=dest,
                 channelIndex=self.config.channel_index,
             )
+            log.info(
+                "sendText -> dest=%s channel=%d payload_len=%d",
+                dest, self.config.channel_index, len(payload),
+            )
+            log.debug("sendText payload=%r", payload)
             return True
         except Exception as e:
-            print(f"Error publishing message: {e}")
+            log.exception("Error publishing message: %s", e)
             return False
 
     def on_receive(self, packet: Dict[str, Any], interface: Any = None) -> None:
@@ -244,11 +253,18 @@ class MeshtasticBridge:
             packet: The received packet as a dictionary (pubsub payload).
             interface: The MeshInterface that received it (unused).
         """
+        decoded = packet.get("decoded", {}) if isinstance(packet, dict) else {}
+        log.info(
+            "on_receive from=%s portnum=%s text=%r",
+            packet.get("fromId") if isinstance(packet, dict) else None,
+            decoded.get("portnum"),
+            decoded.get("text"),
+        )
         if self.packet_callback:
             try:
                 self.packet_callback(packet)
             except Exception as e:
-                print(f"Error handling received packet: {e}")
+                log.exception("Error handling received packet: %s", e)
 
     def broadcast_with_virtual_node(
         self,
@@ -326,7 +342,7 @@ class MeshtasticBridge:
                     return ""
 
         except Exception as e:
-            print(f"Error decoding payload: {e}")
+            log.exception("Error decoding payload: %s", e)
 
         return ""
 
@@ -357,7 +373,7 @@ class MeshtasticBridge:
             )
 
         except Exception as e:
-            print(f"Error injecting node info: {e}")
+            log.exception("Error injecting node info: %s", e)
             return False
 
     def handle_outgoing_from_virtual_node(
@@ -388,7 +404,7 @@ class MeshtasticBridge:
                 'contact_name': mapping.friendly_name
             }
 
-        print(f"Unknown virtual node sending message: {virtual_node_id}")
+        log.warning("Unknown virtual node sending message: %s", virtual_node_id)
         return None
 
     def setup_message_handler(
@@ -456,7 +472,7 @@ class MeshtasticBridge:
             )
 
         except Exception as e:
-            print(f"Error sending ACK: {e}")
+            log.exception("Error sending ACK: %s", e)
             return False
 
 
@@ -483,7 +499,7 @@ class VirtualNodeManager:
         max_int = int.from_bytes(bytes.fromhex("FFFFFFFF"), 'big')
 
         if current_int > max_int - self.max_nodes:
-            print("Warning: Approaching virtual node ID limit")
+            log.warning("Approaching virtual node ID limit")
 
         self.current_allocation += 1
         return new_id
@@ -502,9 +518,9 @@ class VirtualNodeManager:
         try:
             with open(self.mapping_file, 'w') as f:
                 json.dump(data, f, indent=2)
-            print(f"Saved {len(mappings)} virtual node mappings")
+            log.info("Saved %d virtual node mappings", len(mappings))
         except IOError as e:
-            print(f"Error saving mappings: {e}")
+            log.error("Error saving mappings: %s", e)
 
 
 # Main bridge class combining both layers
@@ -551,7 +567,7 @@ class IToMBridge:
                     json.dump({}, f)
 
         except Exception as e:
-            print(f"Error initializing bridge: {e}")
+            log.exception("Error initializing bridge: %s", e)
             return False
 
         return True
@@ -582,13 +598,13 @@ class IToMBridge:
             return False
 
         if not self.meshtastic_bridge.subscribe_to_text_messages():
-            print("Warning: Could not subscribe to text messages")
+            log.warning("Could not subscribe to text messages")
 
         # Set up message routing callbacks
         self._setup_routing()
 
         self.running = True
-        print("iMeshage bridge is running...")
+        log.info("iMeshage bridge is running...")
 
         return True
 
@@ -602,7 +618,7 @@ class IToMBridge:
             pass
 
         self.running = False
-        print("Bridge stopped")
+        log.info("Bridge stopped")
 
     def _setup_routing(self) -> None:
         """Set up message routing between iMessage and Meshtastic."""
@@ -662,16 +678,16 @@ class IToMBridge:
     def run(self) -> None:
         """Run the bridge as a daemon."""
         if not self.meshtastic_bridge or not self.meshtastic_bridge.is_connected:
-            print("Error: Bridge is not connected")
+            log.error("Bridge is not connected")
             return
 
         apple_bridge = self.applescript_bridge
 
         if not apple_bridge:
-            print("Error: AppleScript bridge not initialized")
+            log.error("AppleScript bridge not initialized")
             return
 
-        print("iMeshage bridge monitoring for new messages...")
+        log.info("iMeshage bridge monitoring for new messages...")
 
         # Monitor for incoming iMessages every 5 seconds
         while self.running:
@@ -679,9 +695,17 @@ class IToMBridge:
                 messages = apple_bridge.get_incoming_messages()
                 mesh_bridge = self.meshtastic_bridge
 
+                if messages:
+                    log.info("poll: %d new iMessage(s)", len(messages))
+
                 for msg in messages:
                     virtual_node_id = self.node_manager.allocate_virtual_node_id()
                     friendly_name = msg.sender or f"Contact {virtual_node_id}"
+
+                    log.info(
+                        "forwarding iMessage from %s (chat=%s): %r",
+                        friendly_name, msg.chat_guid, msg.plaintext[:80],
+                    )
 
                     # Save mapping
                     with open(self.node_manager.mapping_file, 'w') as f:
@@ -700,7 +724,7 @@ class IToMBridge:
                     )
 
             except Exception as e:
-                print(f"Error during monitoring: {e}")
+                log.exception("Error during monitoring: %s", e)
 
             time.sleep(5.0)
 
@@ -712,25 +736,30 @@ def main():
 
     parser = argparse.ArgumentParser(description="iMeshage - iMessage to Meshtastic Bridge")
     parser.add_argument("-c", "--config", help="Path to configuration file (JSON)")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (DEBUG) logging")
 
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
 
     # Create and start bridge
     bridge = IToMBridge(config_path=args.config)
 
     if not bridge.initialize():
-        print("Failed to initialize bridge")
+        log.error("Failed to initialize bridge")
         return 1
 
     if not bridge.start():
-        print("Failed to start bridge")
+        log.error("Failed to start bridge")
         return 1
 
     try:
         bridge.run()
     except KeyboardInterrupt:
-        print("\nStopping bridge...")
+        log.info("Stopping bridge...")
         bridge.stop()
         return 0
 
