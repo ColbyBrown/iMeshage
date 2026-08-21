@@ -75,7 +75,7 @@ This is a one-time, out-of-band step. The bridge does **not** create the channel
 python -m venv .venv
 source .venv/bin/activate
 
-pip install meshtastic PySerial AppKit Quartz
+pip install meshtastic PySerial
 ```
 
 Note: On macOS, you may need `brew install python` or adjust paths.

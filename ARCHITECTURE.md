@@ -143,7 +143,7 @@ Persistent mapping between iMessage conversations and Meshtastic virtual nodes:
 ## Installation Requirements
 
 ```bash
-pip install meshtastic PySerial PyQt5 AppKit Quartz kivy-ios
+pip install meshtastic PySerial PyQt5 kivy-ios
 ```
 
 Note: On macOS, you may need to adjust permissions for USB serial devices.

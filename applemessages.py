@@ -17,9 +17,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, Optional, Dict, List, Any
 
-import Quartz
-import AppKit
-
 
 # iMessage SQLite Database Location
 iMESSAGE_DB_PATH = os.path.expanduser("~/Library/Messages/chat.db")
@@ -65,7 +62,6 @@ class AppleScriptBridge:
         self.mapping_file: Optional[Path] = None
         self.new_messages_callback: Optional[Callable] = None
         self._connection: Optional[sqlite3.Connection] = None
-        self._scroller_app_id = None
 
         # Cache for unread messages tracking
         self._last_unread_timestamp: float = 0
@@ -81,19 +77,6 @@ class AppleScriptBridge:
             self.mapping_file = Path(config.get('mapping_file', 'node_mapping.json'))
         except (json.JSONDecodeError, IOError) as e:
             print(f"Warning: Could not load mapping config: {e}")
-
-    def _get_scroller_app(self) -> AppKit.NSRunningApplication:
-        """Get the ChatScroller app (iMessage UI process)."""
-        if self._scroller_app_id is None:
-            # Find iMessage ChatScroller by bundle identifier
-            for pid, app_bundle in Quartz.ns.Application.runningApplicationsDictionaryItems().items():
-                bundle = app_bundle.valueForKey_("LSBUApplicationBundleId")
-                if str(bundle) == "com.apple.ChatScroller":
-                    self._scroller_app_id = pid
-                    break
-        if self._scroller_app_id:
-            return Quartz.ns.Application.runningApplicationWithProcessID_(self._scroller_app_id)
-        return AppKit.NSRunningApplication.applicationWithOptions_("NSLaunchList", {})
 
     def send_message(
         self,
